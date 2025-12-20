@@ -22,6 +22,11 @@ export const UserZodSchema = z
   })
   .strict();
 
+export const UserLoginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
+
 export const UserSchema = new Schema({
   name: String,
   email: String,

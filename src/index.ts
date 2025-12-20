@@ -1,7 +1,7 @@
 import express from "express";
 import { WebSocketServer } from "ws";
-import { User, UserZodSchema } from "./schema/student";
-import { hash } from "bcryptjs";
+import { User, UserLoginSchema, UserZodSchema } from "./schema/student";
+import { hash, compare } from "bcryptjs";
 import { sign } from "jsonwebtoken";
 
 const SECRET = process.env.JWT_SECRET || "";
@@ -50,10 +50,54 @@ app.post("/auth/signup", async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: newUser,
+      data: {
+        _id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+      },
     });
   } catch (error) {
     console.log("Error \n", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+app.post("/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const { success } = UserLoginSchema.safeParse({
+      email,
+      password,
+    });
+
+    if (!success)
+      return res.status(400).json({
+        success: false,
+        error: "Invalid email or password",
+      });
+    const user = await User.findOne({
+      email,
+    });
+    const validPassword = await compare(password, user?.password || "");
+    if (!user || !validPassword)
+      return res.status(400).json({
+        success: false,
+        error: "Invalid email or password",
+      });
+
+    const token = sign(
+      { _id: user._id, name: user.name, email: user.email, role: user.role },
+      SECRET
+    );
+
+    res.json({
+      success: true,
+      data: {
+        token,
+      },
+    });
+  } catch (error) {
     res.status(500).send("Internal server error");
   }
 });
