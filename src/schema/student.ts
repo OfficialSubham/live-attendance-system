@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import mongoose, { Schema } from "mongoose";
+import mongoose, { model, Schema } from "mongoose";
 
 dotenv.config();
 
@@ -12,9 +12,11 @@ const URL = process.env.MONGO_URL || "";
 
 mongoose.connect(URL);
 
-export const Student = new Schema({
+export const UserSchema = new Schema({
   name: String,
   email: String,
   password: String,
   role: ROLE,
 });
+
+export const User = model("user", UserSchema);

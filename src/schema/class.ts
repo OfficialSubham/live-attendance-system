@@ -1,18 +1,21 @@
-import { Schema } from "mongoose";
+import { Schema, model } from "mongoose";
 
 enum Status {
   present,
   absent,
 }
 
-export const Class = new Schema({
+export const ClassSchema = new Schema({
   className: String,
   teacherId: Schema.Types.ObjectId,
   studentIds: [Schema.Types.ObjectId],
 });
 
-export const Attendence = new Schema({
+export const AttendanceSchema = new Schema({
   classId: Schema.Types.ObjectId,
   studentId: Schema.Types.ObjectId,
   status: Status,
 });
+
+export const Classes = model("class", ClassSchema);
+export const Attendance = model("attendance", AttendanceSchema);
