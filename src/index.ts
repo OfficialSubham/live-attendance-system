@@ -3,6 +3,18 @@ import { WebSocketServer } from "ws";
 import { User, UserLoginSchema, UserZodSchema } from "./schema/student";
 import { hash, compare } from "bcryptjs";
 import { sign, verify } from "jsonwebtoken";
+import { Classes, ClassZodSchema } from "./schema/class";
+
+type UserType = {
+  _id: string;
+  name: string;
+  email: string;
+  role: "student" | "teacher";
+};
+
+type Header = {
+  token: string;
+};
 
 const SECRET = process.env.JWT_SECRET || "";
 const PORT = 3000;
@@ -103,7 +115,7 @@ app.post("/auth/login", async (req, res) => {
 });
 
 app.get("/auth/me", (req, res) => {
-  const { token } = req.headers as { token: string };
+  const { token } = req.headers as Header;
   try {
     const user = verify(token, SECRET) as {
       _id: string;
@@ -114,7 +126,7 @@ app.get("/auth/me", (req, res) => {
     if (!user || !token)
       return res.status(400).json({
         success: false,
-        message: "Invalid",
+        error: "Unauthorized, token missing or invalid",
       });
     res.json({
       success: true,
@@ -126,9 +138,48 @@ app.get("/auth/me", (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(401).json({
       success: false,
-      message: "Invalid",
+      error: "Unauthorized, token missing or invalid",
+    });
+  }
+});
+
+app.post("/class", async (req, res) => {
+  const { token } = req.headers as Header;
+  const { className } = req.body;
+  try {
+    const user = verify(token, SECRET) as UserType;
+
+    if (user.role != "teacher")
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden, teacher access required",
+      });
+    const { success } = ClassZodSchema.safeParse({
+      className,
+    });
+    if (!success)
+      return res.status(400).json({
+        success: false,
+        error: "Invalid",
+      });
+    const newClass = await Classes.create({
+      className,
+    });
+    res.status(201).json({
+      success: true,
+      data: {
+        _id: newClass._id,
+        className,
+        teacherId: user._id,
+        studentIds: [],
+      },
+    });
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: "Unauthorized token missing or invalid",
     });
   }
 });
