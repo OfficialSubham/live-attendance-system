@@ -2,7 +2,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { User, UserLoginSchema, UserZodSchema } from "./schema/student";
 import { hash, compare } from "bcryptjs";
-import { sign } from "jsonwebtoken";
+import { sign, verify } from "jsonwebtoken";
 
 const SECRET = process.env.JWT_SECRET || "";
 const PORT = 3000;
@@ -99,6 +99,37 @@ app.post("/auth/login", async (req, res) => {
     });
   } catch (error) {
     res.status(500).send("Internal server error");
+  }
+});
+
+app.get("/auth/me", (req, res) => {
+  const { token } = req.headers as { token: string };
+  try {
+    const user = verify(token, SECRET) as {
+      _id: string;
+      name: string;
+      email: string;
+      role: "student" | "teacher";
+    };
+    if (!user || !token)
+      return res.status(400).json({
+        success: false,
+        message: "Invalid",
+      });
+    res.json({
+      success: true,
+      data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: "Invalid",
+    });
   }
 });
 
