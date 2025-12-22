@@ -25,9 +25,19 @@ type ClassType = {
   className: string;
 };
 
+type Session = {
+  classId: string;
+  startedAt: string;
+  attendance: {
+    [key: string]: string;
+  };
+};
+
 type Header = {
   token: string;
 };
+
+let activeSession: Session | null = null;
 
 const SECRET = process.env.JWT_SECRET || "";
 const PORT = 3000;
@@ -372,6 +382,50 @@ app.get("/class/:id/my-attendence", async (req, res) => {
     res
       .status(400)
       .json({ success: false, error: "Unauthorized token missing or invalid" });
+  }
+});
+
+app.post("/attendance/start", async (req, res) => {
+  const { token } = req.headers as Header;
+  const { classId } = req.body;
+  try {
+    const userDetails = verify(token, SECRET) as UserType;
+    if (!isValidObjectId(classId) || userDetails.role != "teacher")
+      return res.status(400).json({
+        success: false,
+        error: "Forbidden, you need teacher access",
+      });
+
+    const classOwner = await Classes.findOne({
+      _id: classId,
+      teacherId: userDetails._id,
+    });
+
+    if (!classOwner)
+      return res.status(400).json({
+        success: false,
+        error: "Forbidden, you don't have access to this class",
+      });
+
+    const sessionStartTime = new Date().toISOString();
+    activeSession = {
+      classId,
+      startedAt: sessionStartTime,
+      attendance: {},
+    };
+
+    res.json({
+      success: true,
+      data: {
+        classId,
+        startedAt: sessionStartTime,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: "Unauthorized token missing or invalid",
+    });
   }
 });
 
