@@ -8,7 +8,7 @@ import {
 } from "./schema/student";
 import { hash, compare } from "bcryptjs";
 import { sign, verify } from "jsonwebtoken";
-import { Classes, ClassZodSchema } from "./schema/class";
+import { Attendance, Classes, ClassZodSchema } from "./schema/class";
 import mongoose, { isValidObjectId, ObjectId, Schema } from "mongoose";
 
 type UserType = {
@@ -319,6 +319,56 @@ app.get("/students", async (req, res) => {
     res.json({ success: true, data: students });
   } catch (error) {
     console.log(error);
+    res
+      .status(400)
+      .json({ success: false, error: "Unauthorized token missing or invalid" });
+  }
+});
+
+app.get("/class/:id/my-attendence", async (req, res) => {
+  const { id } = req.params;
+  const { token } = req.headers as Header;
+
+  try {
+    const userDetails = verify(token, SECRET) as UserType;
+    if (userDetails.role != "student")
+      return res
+        .status(400)
+        .json({ success: false, error: "Forbidden, student access required" });
+
+    const data = await Classes.findOne({
+      _id: id,
+      studentIds: {
+        $in: userDetails._id,
+      },
+    });
+    if (!data)
+      return res.status(400).json({
+        success: false,
+        error: "Forbidden, you are not added to this class",
+      });
+
+    const wasPresent = await Attendance.findOne({
+      classId: id,
+      studentId: userDetails._id,
+    });
+
+    if (wasPresent)
+      return res.json({
+        success: true,
+        data: {
+          classId: wasPresent._id,
+          status: wasPresent.status,
+        },
+      });
+    return res.json({
+      success: true,
+      data: {
+        classId: new mongoose.Types.ObjectId(id),
+        status: null,
+      },
+    });
+  } catch (error) {
     res
       .status(400)
       .json({ success: false, error: "Unauthorized token missing or invalid" });
