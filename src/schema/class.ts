@@ -1,5 +1,5 @@
-import { Schema, model } from "mongoose";
-import z from "zod";
+import mongoose, { Schema, model } from "mongoose";
+import z, { string } from "zod";
 
 enum Status {
   present,
@@ -12,13 +12,13 @@ export const ClassZodSchema = z.object({
 
 export const ClassSchema = new Schema({
   className: String,
-  teacherId: Schema.Types.ObjectId,
-  studentIds: [Schema.Types.ObjectId],
+  teacherId: mongoose.Types.ObjectId,
+  studentIds: [mongoose.Types.ObjectId],
 });
 
 export const AttendanceSchema = new Schema({
-  classId: Schema.Types.ObjectId,
-  studentId: Schema.Types.ObjectId,
+  classId: mongoose.Types.ObjectId,
+  studentId: mongoose.Types.ObjectId,
   status: ["present", "absent"],
 });
 

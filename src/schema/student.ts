@@ -22,6 +22,10 @@ export const UserZodSchema = z
   })
   .strict();
 
+export const StudentIdSchema = z.object({
+  studentId: z.string(),
+});
+
 export const UserLoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),

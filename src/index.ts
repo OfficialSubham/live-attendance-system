@@ -1,15 +1,28 @@
 import express from "express";
 import { WebSocketServer } from "ws";
-import { User, UserLoginSchema, UserZodSchema } from "./schema/student";
+import {
+  StudentIdSchema,
+  User,
+  UserLoginSchema,
+  UserZodSchema,
+} from "./schema/student";
 import { hash, compare } from "bcryptjs";
 import { sign, verify } from "jsonwebtoken";
 import { Classes, ClassZodSchema } from "./schema/class";
+import mongoose, { isValidObjectId, ObjectId, Schema } from "mongoose";
 
 type UserType = {
   _id: string;
   name: string;
   email: string;
   role: "student" | "teacher";
+};
+
+type ClassType = {
+  _id: Schema.Types.ObjectId;
+  teacherId: mongoose.Types.ObjectId;
+  studentIds: mongoose.Types.ObjectId[];
+  className: string;
 };
 
 type Header = {
@@ -92,7 +105,13 @@ app.post("/auth/login", async (req, res) => {
       email,
     });
     const validPassword = await compare(password, user?.password || "");
-    if (!user || !validPassword)
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found",
+      });
+    }
+    if (!validPassword)
       return res.status(400).json({
         success: false,
         error: "Invalid email or password",
@@ -166,6 +185,8 @@ app.post("/class", async (req, res) => {
       });
     const newClass = await Classes.create({
       className,
+      studentIds: [],
+      teacherId: new mongoose.Types.ObjectId(user._id),
     });
     res.status(201).json({
       success: true,
@@ -180,6 +201,62 @@ app.post("/class", async (req, res) => {
     res.status(401).json({
       success: false,
       message: "Unauthorized token missing or invalid",
+    });
+  }
+});
+
+app.post("/class/:id/add-student", async (req, res) => {
+  const { id } = req.params;
+  const { token } = req.headers as Header;
+  const { studentId } = req.body;
+  // const convertedId = new mongoose.Types.ObjectId(id);
+  try {
+    const user = verify(token, SECRET) as UserType; //Check wrong token gives error or not
+    if (user.role != "teacher")
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden, teacher access required",
+      });
+    const createdClass = (await Classes.findById(id)) as ClassType;
+    if (!createdClass)
+      return res.status(404).json({
+        success: false,
+        error: "Class not found",
+      });
+    if (!createdClass.teacherId.equals(user._id)) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden, not class teacher",
+      });
+    }
+    const { success } = StudentIdSchema.safeParse({
+      studentId,
+    });
+    if (!success)
+      return res
+        .status(400)
+        .json({ success: false, error: "Please enter valid student id" });
+    const result = await Classes.findOneAndUpdate(
+      {
+        _id: id,
+      },
+      {
+        $push: {
+          studentIds: new mongoose.Types.ObjectId(studentId),
+        },
+      },
+      { new: true }
+    );
+    console.log("Result : ", result);
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized, token missing or invalid",
     });
   }
 });
