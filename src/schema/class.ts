@@ -12,13 +12,13 @@ export const ClassZodSchema = z.object({
 
 export const ClassSchema = new Schema({
   className: String,
-  teacherId: mongoose.Types.ObjectId,
-  studentIds: [mongoose.Types.ObjectId],
+  teacherId: { type: mongoose.Types.ObjectId, ref: "user" },
+  studentIds: { type: [mongoose.Types.ObjectId], ref: "user" },
 });
 
 export const AttendanceSchema = new Schema({
   classId: mongoose.Types.ObjectId,
-  studentId: mongoose.Types.ObjectId,
+  studentId: { type: mongoose.Types.ObjectId, ref: "user" },
   status: ["present", "absent"],
 });
 

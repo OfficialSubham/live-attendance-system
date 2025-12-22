@@ -247,7 +247,6 @@ app.post("/class/:id/add-student", async (req, res) => {
       },
       { new: true }
     );
-    console.log("Result : ", result);
     res.json({
       success: true,
       data: result,
@@ -258,6 +257,43 @@ app.post("/class/:id/add-student", async (req, res) => {
       success: false,
       error: "Unauthorized, token missing or invalid",
     });
+  }
+});
+
+app.get("/class/:id", async (req, res) => {
+  const { id } = req.params;
+  const { token } = req.headers as Header;
+
+  try {
+    const userDetail = verify(token, SECRET) as UserType;
+    const data = await Classes.findOne({
+      _id: id,
+      $or: [
+        { teacherId: userDetail._id },
+        {
+          studentIds: {
+            $in: userDetail._id,
+          },
+        },
+      ],
+    }).populate("studentIds", "-__v -password");
+    if (!data)
+      return res.status(400).json({
+        success: false,
+        error: "You are not creater or added in this class",
+      });
+    res.json({
+      success: true,
+      data: {
+        _id: data._id,
+        className: data.className,
+        teacherId: data.teacherId,
+        students: data.studentIds,
+      },
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(400).json({ success: false, error: "Invalid request" });
   }
 });
 
