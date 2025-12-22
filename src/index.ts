@@ -297,6 +297,34 @@ app.get("/class/:id", async (req, res) => {
   }
 });
 
+app.get("/students", async (req, res) => {
+  const { token } = req.headers as Header;
+  try {
+    const userDetails = verify(token, SECRET) as UserType;
+    if (userDetails.role != "teacher")
+      return res
+        .status(400)
+        .json({ success: false, error: "Forbidden, teacher access required" });
+    const students = await User.find(
+      {
+        role: "student",
+      },
+
+      {
+        password: false,
+        __v: false,
+        role: false,
+      }
+    );
+    res.json({ success: true, data: students });
+  } catch (error) {
+    console.log(error);
+    res
+      .status(400)
+      .json({ success: false, error: "Unauthorized token missing or invalid" });
+  }
+});
+
 const server = app.listen(PORT, () => {
   console.log(`Server is listening in port ${PORT}`);
 });
