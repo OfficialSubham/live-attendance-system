@@ -457,16 +457,63 @@ wss.on("connection", (ws: CustomWebSocket, req) => {
 
     ws.userId = userDetails._id;
     ws.role = userDetails.role;
-    ws.on("close", (code) => {
-      ws.send("Normal closure");
-    });
 
     ws.on("message", (data) => {
-      wss.clients.forEach((client) => {
-        if (client.readyState == WebSocket.OPEN) {
-          client.send(data, { binary: false });
-        }
-      });
+      const messageData = JSON.parse(data.toString()) as {
+        event: string;
+        data?: {
+          studentId: string;
+          status: "present";
+        };
+      };
+      if (
+        (messageData.event == "ATTENDANCE_MARKED" ||
+          messageData.event == "TODAY_SUMMARY" ||
+          messageData.event == "DONE") &&
+        ws.role != "teacher"
+      )
+        return ws.send(
+          JSON.stringify({
+            event: "ERROR",
+            data: { message: "Forbidden, teacher event only" },
+          })
+        );
+
+      if (messageData.event == "MY_ATTENDANCE" && ws.role != "student")
+        return ws.send(
+          JSON.stringify({
+            event: "ERROR",
+            data: { message: "Forbidden, student event only" },
+          })
+        );
+      if (!activeSession)
+        return ws.send(
+          JSON.stringify({
+            event: "ERROR",
+            data: { message: "No active attendance session" },
+          })
+        );
+
+      if (messageData.event == "ATTENDANCE_MARKED") {
+        activeSession.attendance[messageData.data?.studentId || ""] =
+          messageData.data?.status || "";
+        wss.clients.forEach((client: CustomWebSocket) => {
+          if (client.readyState == WebSocket.OPEN) {
+            client.send(data, { binary: false });
+          }
+        });
+      } else if (messageData.event == "MY_ATTENDANCE") {
+        ws.send(
+          JSON.stringify({
+            event: "MY_ATTENDANCE",
+            data: {
+              status: activeSession.attendance[ws.userId || ""]
+                ? activeSession.attendance[ws.userId || ""]
+                : "not yet updated",
+            },
+          })
+        );
+      }
     });
 
     ws.send("Hello");
