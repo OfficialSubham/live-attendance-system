@@ -1,5 +1,5 @@
 import express from "express";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   StudentIdSchema,
   User,
@@ -10,6 +10,12 @@ import { hash, compare } from "bcryptjs";
 import { sign, verify } from "jsonwebtoken";
 import { Attendance, Classes, ClassZodSchema } from "./schema/class";
 import mongoose, { isValidObjectId, ObjectId, Schema } from "mongoose";
+import URL from "url";
+
+interface CustomWebSocket extends WebSocket {
+  userId?: string;
+  role?: "teacher" | "student";
+}
 
 type UserType = {
   _id: string;
@@ -435,6 +441,43 @@ const server = app.listen(PORT, () => {
 
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws) => {
-  ws.on("error", console.error);
+wss.on("connection", (ws: CustomWebSocket, req) => {
+  ws.on("error", (e) => {
+    // console.log(e);
+    ws.send("Closing");
+  });
+  //Extracting token
+  const url = req.url || "";
+  const tokenQuery = URL.parse(url).query;
+  const splitToken = tokenQuery?.split("=");
+  const token = splitToken ? splitToken[1] : "";
+
+  try {
+    const userDetails = verify(token, SECRET) as UserType;
+
+    ws.userId = userDetails._id;
+    ws.role = userDetails.role;
+    ws.on("close", (code) => {
+      ws.send("Normal closure");
+    });
+
+    ws.on("message", (data) => {
+      wss.clients.forEach((client) => {
+        if (client.readyState == WebSocket.OPEN) {
+          client.send(data, { binary: false });
+        }
+      });
+    });
+
+    ws.send("Hello");
+  } catch (error) {
+    console.log(error);
+    ws.close(
+      1000,
+      JSON.stringify({
+        event: "ERROR",
+        data: { message: "Unauthorized or invalid token" },
+      })
+    );
+  }
 });
