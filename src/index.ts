@@ -92,7 +92,7 @@ app.post("/auth/signup", async (req, res) => {
     res.status(201).json({
       success: true,
       data: {
-        _id: newUser._id,
+        _id: newUser._id.toString(),
         name: newUser.name,
         email: newUser.email,
         role: newUser.role,
@@ -122,9 +122,9 @@ app.post("/auth/login", async (req, res) => {
     });
     const validPassword = await compare(password, user?.password || "");
     if (!user) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
-        error: "User not found",
+        error: "Invalid email or password",
       });
     }
     if (!validPassword)
@@ -134,7 +134,12 @@ app.post("/auth/login", async (req, res) => {
       });
 
     const token = sign(
-      { _id: user._id, name: user.name, email: user.email, role: user.role },
+      {
+        _id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
       SECRET
     );
 
@@ -166,7 +171,7 @@ app.get("/auth/me", (req, res) => {
     res.json({
       success: true,
       data: {
-        _id: user._id,
+        _id: user._id.toString(),
         name: user.name,
         email: user.email,
         role: user.role,
@@ -204,10 +209,11 @@ app.post("/class", async (req, res) => {
       studentIds: [],
       teacherId: new mongoose.Types.ObjectId(user._id),
     });
+    console.log(newClass._id);
     res.status(201).json({
       success: true,
       data: {
-        _id: newClass._id,
+        _id: newClass._id.toString(),
         className,
         teacherId: user._id,
         studentIds: [],
@@ -265,7 +271,12 @@ app.post("/class/:id/add-student", async (req, res) => {
     );
     res.json({
       success: true,
-      data: result,
+      data: {
+        id,
+        className: result?.className,
+        teacherId: user._id,
+        studentId: result?.studentIds,
+      },
     });
   } catch (error) {
     console.log(error);
@@ -301,7 +312,7 @@ app.get("/class/:id", async (req, res) => {
     res.json({
       success: true,
       data: {
-        _id: data._id,
+        _id: data._id.toString(),
         className: data.className,
         teacherId: data.teacherId,
         students: data.studentIds,
@@ -441,7 +452,7 @@ const server = app.listen(PORT, () => {
 
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws: CustomWebSocket, req) => {
+wss.on("connection", async (ws: CustomWebSocket, req) => {
   ws.on("error", (e) => {
     // console.log(e);
     ws.send("Closing");
@@ -458,7 +469,7 @@ wss.on("connection", (ws: CustomWebSocket, req) => {
     ws.userId = userDetails._id;
     ws.role = userDetails.role;
 
-    ws.on("message", (data) => {
+    ws.on("message", async (data) => {
       const messageData = JSON.parse(data.toString()) as {
         event: string;
         data?: {
@@ -513,10 +524,53 @@ wss.on("connection", (ws: CustomWebSocket, req) => {
             },
           })
         );
+      } else if (messageData.event == "TODAY_SUMMARY") {
+        let present = 0;
+        let absent = 0;
+        Object.keys(activeSession.attendance).forEach((key) => {
+          const status = activeSession?.attendance[key];
+          if (status == "present") present++;
+          else absent++;
+        });
+        const total = present + absent;
+        wss.clients.forEach((client) => {
+          client.send(
+            JSON.stringify({
+              event: "TODAY_SUMMARY",
+              data: { present, absent, total },
+            })
+          );
+        });
+      } else if (messageData.event == "DONE") {
+        let present = 0;
+        let absent = 0;
+        const allPromises: Promise<any>[] = [];
+        Object.keys(activeSession.attendance).forEach((key) => {
+          const status =
+            activeSession?.attendance[key] == "present" ? "present" : "absent";
+          if (status == "present") present++;
+          else absent++;
+          allPromises.push(
+            Attendance.create({
+              classId: activeSession?.classId,
+              status,
+              studentId: key,
+            })
+          );
+        });
+        await Promise.all(allPromises);
+        const total = present + absent;
+        activeSession = null;
+        wss.clients.forEach((client) => {
+          client.send(
+            JSON.stringify({
+              event: "DONE",
+              data: { message: "Attendence persisted", present, absent, total },
+            })
+          );
+        });
       }
     });
-
-    ws.send("Hello");
   } catch (error) {
     console.log(error);
     ws.close(

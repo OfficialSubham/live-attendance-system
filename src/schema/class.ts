@@ -19,7 +19,7 @@ export const ClassSchema = new Schema({
 export const AttendanceSchema = new Schema({
   classId: mongoose.Types.ObjectId,
   studentId: { type: mongoose.Types.ObjectId, ref: "user" },
-  status: ["present", "absent"],
+  status: String,
 });
 
 export const Classes = model("class", ClassSchema);
