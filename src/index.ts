@@ -40,7 +40,7 @@ type Session = {
 };
 
 type Header = {
-  token: string;
+  authorization: string;
 };
 
 let activeSession: Session | null = null;
@@ -115,23 +115,18 @@ app.post("/auth/login", async (req, res) => {
     if (!success)
       return res.status(400).json({
         success: false,
-        error: "Invalid email or password",
+        error: "Invalid request schema",
       });
     const user = await User.findOne({
       email,
     });
     const validPassword = await compare(password, user?.password || "");
-    if (!user) {
+    if (!user || !validPassword) {
       return res.status(400).json({
         success: false,
         error: "Invalid email or password",
       });
     }
-    if (!validPassword)
-      return res.status(400).json({
-        success: false,
-        error: "Invalid email or password",
-      });
 
     const token = sign(
       {
@@ -155,15 +150,15 @@ app.post("/auth/login", async (req, res) => {
 });
 
 app.get("/auth/me", (req, res) => {
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
   try {
-    const user = verify(token, SECRET) as {
+    const user = verify(authorization, SECRET) as {
       _id: string;
       name: string;
       email: string;
       role: "student" | "teacher";
     };
-    if (!user || !token)
+    if (!user || !authorization)
       return res.status(400).json({
         success: false,
         error: "Unauthorized, token missing or invalid",
@@ -171,7 +166,7 @@ app.get("/auth/me", (req, res) => {
     res.json({
       success: true,
       data: {
-        _id: user._id.toString(),
+        _id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
@@ -186,10 +181,10 @@ app.get("/auth/me", (req, res) => {
 });
 
 app.post("/class", async (req, res) => {
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
   const { className } = req.body;
   try {
-    const user = verify(token, SECRET) as UserType;
+    const user = verify(authorization, SECRET) as UserType;
 
     if (user.role != "teacher")
       return res.status(403).json({
@@ -202,14 +197,13 @@ app.post("/class", async (req, res) => {
     if (!success)
       return res.status(400).json({
         success: false,
-        error: "Invalid",
+        error: "Invalid request schema",
       });
     const newClass = await Classes.create({
       className,
       studentIds: [],
       teacherId: new mongoose.Types.ObjectId(user._id),
     });
-    console.log(newClass._id);
     res.status(201).json({
       success: true,
       data: {
@@ -222,18 +216,18 @@ app.post("/class", async (req, res) => {
   } catch (error) {
     res.status(401).json({
       success: false,
-      message: "Unauthorized token missing or invalid",
+      error: "Unauthorized, token missing or invalid",
     });
   }
 });
 
 app.post("/class/:id/add-student", async (req, res) => {
   const { id } = req.params;
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
   const { studentId } = req.body;
   // const convertedId = new mongoose.Types.ObjectId(id);
   try {
-    const user = verify(token, SECRET) as UserType; //Check wrong token gives error or not
+    const user = verify(authorization, SECRET) as UserType; //Check wrong token gives error or not
     if (user.role != "teacher")
       return res.status(403).json({
         success: false,
@@ -251,13 +245,32 @@ app.post("/class/:id/add-student", async (req, res) => {
         error: "Forbidden, not class teacher",
       });
     }
+
     const { success } = StudentIdSchema.safeParse({
       studentId,
     });
     if (!success)
       return res
         .status(400)
-        .json({ success: false, error: "Please enter valid student id" });
+        .json({ success: false, error: "Invalid request schema" });
+
+    const isStudentThere = createdClass.studentIds.find((s) => s == studentId);
+    if (isStudentThere)
+      return res.json({
+        success: true,
+        data: {
+          id,
+          className: createdClass?.className,
+          teacherId: user._id,
+          studentIds: createdClass?.studentIds,
+        },
+      });
+
+    const isStudentExisted = await User.findById(studentId);
+    if (!isStudentExisted)
+      return res
+        .status(404)
+        .json({ success: false, error: "Student not found" });
     const result = await Classes.findOneAndUpdate(
       {
         _id: id,
@@ -275,7 +288,7 @@ app.post("/class/:id/add-student", async (req, res) => {
         id,
         className: result?.className,
         teacherId: user._id,
-        studentId: result?.studentIds,
+        studentIds: result?.studentIds,
       },
     });
   } catch (error) {
@@ -289,10 +302,15 @@ app.post("/class/:id/add-student", async (req, res) => {
 
 app.get("/class/:id", async (req, res) => {
   const { id } = req.params;
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
 
   try {
-    const userDetail = verify(token, SECRET) as UserType;
+    const userDetail = verify(authorization, SECRET) as UserType;
+
+    const isClassExisted = await Classes.findById(id);
+    if (!isClassExisted)
+      return res.status(404).json({ success: false, error: "Class not found" });
+
     const data = await Classes.findOne({
       _id: id,
       $or: [
@@ -305,9 +323,9 @@ app.get("/class/:id", async (req, res) => {
       ],
     }).populate("studentIds", "-__v -password");
     if (!data)
-      return res.status(400).json({
+      return res.status(403).json({
         success: false,
-        error: "You are not creater or added in this class",
+        error: "Forbidden, not class teacher",
       });
     res.json({
       success: true,
@@ -320,17 +338,20 @@ app.get("/class/:id", async (req, res) => {
     });
   } catch (error) {
     console.log(error);
-    res.status(400).json({ success: false, error: "Invalid request" });
+    res.status(401).json({
+      success: false,
+      error: "Unauthorized, token missing or invalid",
+    });
   }
 });
 
 app.get("/students", async (req, res) => {
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
   try {
-    const userDetails = verify(token, SECRET) as UserType;
+    const userDetails = verify(authorization, SECRET) as UserType;
     if (userDetails.role != "teacher")
       return res
-        .status(400)
+        .status(403)
         .json({ success: false, error: "Forbidden, teacher access required" });
     const students = await User.find(
       {
@@ -346,18 +367,19 @@ app.get("/students", async (req, res) => {
     res.json({ success: true, data: students });
   } catch (error) {
     console.log(error);
-    res
-      .status(400)
-      .json({ success: false, error: "Unauthorized token missing or invalid" });
+    res.status(401).json({
+      success: false,
+      error: "Unauthorized, token missing or invalid",
+    });
   }
 });
 
-app.get("/class/:id/my-attendence", async (req, res) => {
+app.get("/class/:id/my-attendance", async (req, res) => {
   const { id } = req.params;
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
 
   try {
-    const userDetails = verify(token, SECRET) as UserType;
+    const userDetails = verify(authorization, SECRET) as UserType;
     if (userDetails.role != "student")
       return res
         .status(400)
@@ -403,25 +425,29 @@ app.get("/class/:id/my-attendence", async (req, res) => {
 });
 
 app.post("/attendance/start", async (req, res) => {
-  const { token } = req.headers as Header;
+  const { authorization } = req.headers as Header;
   const { classId } = req.body;
   try {
-    const userDetails = verify(token, SECRET) as UserType;
-    if (!isValidObjectId(classId) || userDetails.role != "teacher")
+    const userDetails = verify(authorization, SECRET) as UserType;
+    const { success } = ClassZodSchema.safeParse({ className: classId });
+    if (!success)
       return res.status(400).json({
         success: false,
-        error: "Forbidden, you need teacher access",
+        error: "Invalid request schema",
       });
-
-    const classOwner = await Classes.findOne({
-      _id: classId,
-      teacherId: userDetails._id,
-    });
-
-    if (!classOwner)
-      return res.status(400).json({
+    if (userDetails.role != "teacher")
+      return res.status(403).json({
         success: false,
-        error: "Forbidden, you don't have access to this class",
+        error: "Forbidden, teacher access required",
+      });
+    const isClassExisted = await Classes.findById(classId);
+    if (!isClassExisted)
+      return res.status(404).json({ success: false, error: "Class not found" });
+
+    if (isClassExisted.teacherId?.toString() != userDetails._id)
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden, not class teacher",
       });
 
     const sessionStartTime = new Date().toISOString();
@@ -439,22 +465,19 @@ app.post("/attendance/start", async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(401).json({
       success: false,
-      error: "Unauthorized token missing or invalid",
+      error: "Unauthorized, token missing or invalid",
     });
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server is listening in port ${PORT}`);
-});
+const server = app.listen(PORT);
 
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", async (ws: CustomWebSocket, req) => {
   ws.on("error", (e) => {
-    // console.log(e);
     ws.send("Closing");
   });
   //Extracting token
@@ -462,7 +485,7 @@ wss.on("connection", async (ws: CustomWebSocket, req) => {
   const tokenQuery = URL.parse(url).query;
   const splitToken = tokenQuery?.split("=");
   const token = splitToken ? splitToken[1] : "";
-
+  if (!url || url == "/") ws.close();
   try {
     const userDetails = verify(token, SECRET) as UserType;
 
@@ -506,6 +529,13 @@ wss.on("connection", async (ws: CustomWebSocket, req) => {
         );
 
       if (messageData.event == "ATTENDANCE_MARKED") {
+        if (!activeSession)
+          return ws.send(
+            JSON.stringify({
+              event: "ERROR",
+              message: "No active attendance session",
+            })
+          );
         activeSession.attendance[messageData.data?.studentId || ""] =
           messageData.data?.status || "";
         wss.clients.forEach((client: CustomWebSocket) => {
@@ -565,7 +595,7 @@ wss.on("connection", async (ws: CustomWebSocket, req) => {
           client.send(
             JSON.stringify({
               event: "DONE",
-              data: { message: "Attendence persisted", present, absent, total },
+              data: { message: "Attendance persisted", present, absent, total },
             })
           );
         });
