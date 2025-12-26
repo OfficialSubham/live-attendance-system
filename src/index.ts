@@ -11,6 +11,7 @@ import { sign, verify } from "jsonwebtoken";
 import { Attendance, Classes, ClassZodSchema } from "./schema/class";
 import mongoose, { isValidObjectId, ObjectId, Schema } from "mongoose";
 import URL from "url";
+import z from "zod";
 
 interface CustomWebSocket extends WebSocket {
   userId?: string;
@@ -48,6 +49,15 @@ let activeSession: Session | null = null;
 const SECRET = process.env.JWT_SECRET || "";
 const PORT = 3000;
 const SALT = 10;
+
+const wsMessageSchema = z.object({
+  event: z.string(),
+  data: z.object({
+    studentId: z.string().optional(),
+    status: z.enum(["present", "absent"]).optional(),
+  }),
+});
+
 const app = express();
 
 app.use(express.json());
@@ -478,14 +488,29 @@ const wss = new WebSocketServer({ server });
 
 wss.on("connection", async (ws: CustomWebSocket, req) => {
   ws.on("error", (e) => {
+    console.log("Websocket ERROR", e);
+    activeSession = null;
     ws.send("Closing");
   });
+
+  ws.on("close", () => {
+    activeSession = null;
+  });
+  const teacherQuery = ["ATTENDANCE_MARKED", "TODAY_SUMMARY", "DONE"];
   //Extracting token
   const url = req.url || "";
   const tokenQuery = URL.parse(url).query;
   const splitToken = tokenQuery?.split("=");
   const token = splitToken ? splitToken[1] : "";
-  if (!url || url == "/") ws.close();
+  if (!url || url == "/") {
+    ws.send(
+      JSON.stringify({
+        event: "ERROR",
+        data: { message: "Unauthorized or invalid token" },
+      })
+    );
+    ws.close();
+  }
   try {
     const userDetails = verify(token, SECRET) as UserType;
 
@@ -493,122 +518,169 @@ wss.on("connection", async (ws: CustomWebSocket, req) => {
     ws.role = userDetails.role;
 
     ws.on("message", async (data) => {
-      const messageData = JSON.parse(data.toString()) as {
-        event: string;
-        data?: {
-          studentId: string;
-          status: "present";
+      try {
+        const messageData = JSON.parse(data.toString()) as {
+          event:
+            | "DONE"
+            | "TODAY_SUMMARY"
+            | "ATTENDANCE_MARKED"
+            | "MY_ATTENDANCE";
+          data?: {
+            studentId: string;
+            status: "present" | "absent";
+          };
         };
-      };
-      if (
-        (messageData.event == "ATTENDANCE_MARKED" ||
-          messageData.event == "TODAY_SUMMARY" ||
-          messageData.event == "DONE") &&
-        ws.role != "teacher"
-      )
-        return ws.send(
-          JSON.stringify({
-            event: "ERROR",
-            data: { message: "Forbidden, teacher event only" },
-          })
-        );
-
-      if (messageData.event == "MY_ATTENDANCE" && ws.role != "student")
-        return ws.send(
-          JSON.stringify({
-            event: "ERROR",
-            data: { message: "Forbidden, student event only" },
-          })
-        );
-      if (!activeSession)
-        return ws.send(
-          JSON.stringify({
-            event: "ERROR",
-            data: { message: "No active attendance session" },
-          })
-        );
-
-      if (messageData.event == "ATTENDANCE_MARKED") {
-        if (!activeSession)
+        const { success, error } = wsMessageSchema.safeParse(messageData);
+        if (!success) {
+          console.log("MESSAGE DATA", messageData);
+          console.log("SCHEMA ERROR", error);
           return ws.send(
             JSON.stringify({
               event: "ERROR",
-              message: "No active attendance session",
+              data: { message: "Invalid request schema," },
             })
           );
-        activeSession.attendance[messageData.data?.studentId || ""] =
-          messageData.data?.status || "";
-        wss.clients.forEach((client: CustomWebSocket) => {
-          if (client.readyState == WebSocket.OPEN) {
-            client.send(data, { binary: false });
-          }
-        });
-      } else if (messageData.event == "MY_ATTENDANCE") {
+        }
+        if (teacherQuery.includes(messageData.event) && ws.role != "teacher")
+          return ws.send(
+            JSON.stringify({
+              event: "ERROR",
+              data: { message: "Forbidden, teacher event only" },
+            })
+          );
+
+        if (messageData.event == "MY_ATTENDANCE" && ws.role != "student")
+          return ws.send(
+            JSON.stringify({
+              event: "ERROR",
+              data: { message: "Forbidden, student event only" },
+            })
+          );
+        if (messageData.event == "MY_ATTENDANCE") {
+          if (activeSession == null)
+            return ws.send(
+              JSON.stringify({
+                event: "ERROR",
+                data: { message: "No active attendance session" },
+              })
+            );
+          ws.send(
+            JSON.stringify({
+              event: "MY_ATTENDANCE",
+              data: {
+                status: activeSession.attendance[ws.userId || ""]
+                  ? activeSession.attendance[ws.userId || ""]
+                  : "not yet updated",
+              },
+            })
+          );
+        } else if (messageData.event == "ATTENDANCE_MARKED") {
+          if (activeSession == null)
+            return ws.send(
+              JSON.stringify({
+                event: "ERROR",
+                data: { message: "No active attendance session" },
+              })
+            );
+          activeSession.attendance[messageData.data?.studentId || ""] =
+            messageData.data?.status || "";
+          wss.clients.forEach((client: CustomWebSocket) => {
+            if (client.readyState == WebSocket.OPEN) {
+              client.send(data, { binary: false });
+            }
+          });
+        } else if (messageData.event == "TODAY_SUMMARY") {
+          if (activeSession == null)
+            return ws.send(
+              JSON.stringify({
+                event: "ERROR",
+                data: { message: "No active attendance session" },
+              })
+            );
+          let present = 0;
+          let absent = 0;
+          Object.keys(activeSession.attendance).forEach((key) => {
+            const status = activeSession?.attendance[key];
+            if (status == "present") present++;
+            else absent++;
+          });
+          const total = present + absent;
+          wss.clients.forEach((client) => {
+            client.send(
+              JSON.stringify({
+                event: "TODAY_SUMMARY",
+                data: { present, absent, total },
+              })
+            );
+          });
+        } else if (messageData.event == "DONE") {
+          if (activeSession == null)
+            return ws.send(
+              JSON.stringify({
+                event: "ERROR",
+                data: { message: "No active attendance session" },
+              })
+            );
+          let present = 0;
+          let absent = 0;
+          const allPromises: Promise<any>[] = [];
+          Object.keys(activeSession.attendance).forEach((key) => {
+            const status =
+              activeSession?.attendance[key] == "present"
+                ? "present"
+                : "absent";
+            if (status == "present") present++;
+            else absent++;
+            allPromises.push(
+              Attendance.create({
+                classId: activeSession?.classId,
+                status,
+                studentId: key,
+              })
+            );
+          });
+          await Promise.all(allPromises);
+          const total = present + absent;
+          activeSession = null;
+          wss.clients.forEach((client) => {
+            client.send(
+              JSON.stringify({
+                event: "DONE",
+                data: {
+                  message: "Attendance persisted",
+                  present,
+                  absent,
+                  total,
+                },
+              })
+            );
+          });
+        } else
+          return ws.send(
+            JSON.stringify({
+              event: "ERROR",
+              data: { message: "Unknown event" },
+            })
+          );
+      } catch (error) {
+        console.log(error);
         ws.send(
           JSON.stringify({
-            event: "MY_ATTENDANCE",
-            data: {
-              status: activeSession.attendance[ws.userId || ""]
-                ? activeSession.attendance[ws.userId || ""]
-                : "not yet updated",
-            },
+            event: "ERROR",
+            data: { message: "Invalid message format" },
           })
         );
-      } else if (messageData.event == "TODAY_SUMMARY") {
-        let present = 0;
-        let absent = 0;
-        Object.keys(activeSession.attendance).forEach((key) => {
-          const status = activeSession?.attendance[key];
-          if (status == "present") present++;
-          else absent++;
-        });
-        const total = present + absent;
-        wss.clients.forEach((client) => {
-          client.send(
-            JSON.stringify({
-              event: "TODAY_SUMMARY",
-              data: { present, absent, total },
-            })
-          );
-        });
-      } else if (messageData.event == "DONE") {
-        let present = 0;
-        let absent = 0;
-        const allPromises: Promise<any>[] = [];
-        Object.keys(activeSession.attendance).forEach((key) => {
-          const status =
-            activeSession?.attendance[key] == "present" ? "present" : "absent";
-          if (status == "present") present++;
-          else absent++;
-          allPromises.push(
-            Attendance.create({
-              classId: activeSession?.classId,
-              status,
-              studentId: key,
-            })
-          );
-        });
-        await Promise.all(allPromises);
-        const total = present + absent;
-        activeSession = null;
-        wss.clients.forEach((client) => {
-          client.send(
-            JSON.stringify({
-              event: "DONE",
-              data: { message: "Attendance persisted", present, absent, total },
-            })
-          );
-        });
+        ws.close();
       }
     });
   } catch (error) {
     console.log(error);
-    ws.close(
-      1000,
+    ws.send(
       JSON.stringify({
         event: "ERROR",
         data: { message: "Unauthorized or invalid token" },
       })
     );
+    ws.close();
   }
 });
